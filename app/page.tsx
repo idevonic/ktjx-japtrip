@@ -1,6 +1,27 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Image from "next/image";
+
+// Constants
+const ANIMATION_DELAY = 50;
+const SCROLL_THRESHOLD = 300;
+const OBSERVER_OPTIONS = {
+  threshold: 0.1,
+  rootMargin: '0px 0px -50px 0px'
+};
+
+type Activity = {
+  activity: string;
+  time?: string | null;
+  cost?: string | null;
+  note?: string | null;
+};
+
+type Day = {
+  day: string;
+  location: string;
+  schedule: Activity[];
+};
 
 const itinerary = [
   {
@@ -108,7 +129,7 @@ const itinerary = [
     location: "Tokyo (Shibuya + Harajuku)",
     schedule: [
       { time: "09:00", activity: "Train to Shibuya (~28 min)", cost: "¥210", icon: "🚆", note: "JR Yamanote Line from Akihabara." },
-      { time: "09:30", activity: "Shibuya Crossing, Mag’s Park Rooftop, Shibuya 109", cost: null, icon: "🛍️", note: "Iconic crossing + trendy shopping." },
+      { time: "09:30", activity: "Shibuya Crossing, Mag's Park Rooftop, Shibuya 109", cost: null, icon: "🛍️", note: "Iconic crossing + trendy shopping." },
       { time: "12:30", activity: "Lunch in Shibuya", cost: null, icon: "🍜", note: "Plenty of izakayas and ramen chains." },
       { time: "14:00", activity: "Walk to Harajuku (Takeshita Street, Meiji Shrine)", cost: null, icon: "⛩️", note: "Street fashion + traditional shrine." },
       { time: "18:00", activity: "Dinner Harajuku/Shinjuku", cost: null, icon: "🍜", note: "Try gyukatsu Motomura (famous beef cutlet)." },
@@ -121,7 +142,7 @@ const itinerary = [
     location: "Tokyo (Asakusa)",
     schedule: [
       { time: "09:00", activity: "Train to Asakusa (~15–20 min)", cost: null, icon: "🚆", note: "Direct via Ginza Line." },
-      { time: "09:30", activity: "Kaminarimon → Nakamise shopping → Senso-ji Temple", cost: null, icon: "⛩️", note: "One of Tokyo’s most famous temples." },
+      { time: "09:30", activity: "Kaminarimon → Nakamise shopping → Senso-ji Temple", cost: null, icon: "⛩️", note: "One of Tokyo's most famous temples." },
       { time: "12:30", activity: "Lunch at Asakusa", cost: null, icon: "🍜", note: "Try tempura or melonpan snacks." },
       { time: "14:00", activity: "Optional Tokyo Skytree", cost: null, icon: "🎢", note: "Observation deck with skyline view." },
       { time: "17:00", activity: "Return Akihabara, OTOT shopping", cost: null, icon: "🛍️", note: "Catch up on card/figure shopping." },
@@ -206,109 +227,276 @@ const itinerary = [
 ];
 
 export default function Home() {
-  const [openDays, setOpenDays] = useState<number[]>([]);
+  const [openDays, setOpenDays] = useState<Set<number>>(new Set());
   const [showButton, setShowButton] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
   const [search, setSearch] = useState("");
   const [countdown, setCountdown] = useState("");
   const [tripProgress, setTripProgress] = useState(0);
+  const [viewMode, setViewMode] = useState<"cards" | "list">("cards");
+
+  // Refs for scroll animations - typed
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const observedElementsRef = useRef<Set<Element>>(new Set());
 
   const tripStart = new Date("2026-03-01T00:00:00");
   const tripEnd = new Date("2026-03-16T23:59:59");
 
-  // scroll progress + back to top
-  useEffect(() => {
-    const handleScroll = () => {
-      const scrollTop = window.scrollY;
-      const height =
-        document.documentElement.scrollHeight -
-        document.documentElement.clientHeight;
-      setScrollProgress((scrollTop / height) * 100);
-      setShowButton(scrollTop > 300);
-    };
-    window.addEventListener("scroll", handleScroll);
-    return () => window.removeEventListener("scroll", handleScroll);
-  }, []);
-
-  // dark mode
-  useEffect(() => {
-    document.body.classList.toggle("dark", darkMode);
-  }, [darkMode]);
-
-  // countdown + trip progress
-  useEffect(() => {
-    const updateCountdown = () => {
-      const now = new Date();
-      if (now < tripStart) {
-        const diff = tripStart.getTime() - now.getTime();
-        const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
-        setCountdown(`${days} days to go ✈️`);
-        setTripProgress(0);
-      } else if (now > tripEnd) {
-        setCountdown("Trip completed 🎉");
-        setTripProgress(100);
-      } else {
-        const totalDays = Math.ceil(
-          (tripEnd.getTime() - tripStart.getTime()) / (1000 * 60 * 60 * 24)
-        );
-        const currentDay =
-          Math.floor(
-            (now.getTime() - tripStart.getTime()) / (1000 * 60 * 60 * 24)
-          ) + 1;
-        setCountdown(`Day ${currentDay} of ${totalDays} 📍`);
-        setTripProgress((currentDay / totalDays) * 100);
-      }
-    };
-    updateCountdown();
-    const interval = setInterval(updateCountdown, 1000 * 60 * 60);
-    return () => clearInterval(interval);
-  }, []);
-
-  // toggle one day
-  const toggleDay = (idx: number) => {
-    if (openDays.includes(idx)) {
-      setOpenDays(openDays.filter((day) => day !== idx));
-    } else {
-      setOpenDays([...openDays, idx]);
-    }
-  };
-
-  // collapse all
-  const collapseAll = () => setOpenDays([]);
-
-  // expand all
-  const expandAll = () => setOpenDays(itinerary.map((_, i) => i));
-
-  // icons
-  const getIconClass = (text: string) => {
-    if (text.includes("Flight")) return "icon-flight";
-    if (text.includes("Train") || text.includes("JR")) return "icon-train";
-    if (text.includes("Bus")) return "icon-bus";
-    if (text.includes("hotel") || text.includes("Check-in")) return "icon-hotel";
-    if (text.includes("Shrine") || text.includes("Temple")) return "icon-shrine";
-    if (text.includes("Shopping")) return "icon-shopping";
-    if (
-      text.includes("Lunch") ||
-      text.includes("Dinner") ||
-      text.includes("Breakfast")
-    )
-      return "icon-food";
-    if (text.includes("Onsen")) return "icon-onsen";
-    if (text.includes("USJ") || text.includes("Ghibli") || text.includes("Fuji-Q"))
-      return "icon-themepark";
-    return "icon-default";
-  };
-
-  const sections: Record<string, [number, number]> = {
+  // Memoized calculations
+  const sections = useMemo(() => ({
     Osaka: [0, 3],
     Kyoto: [3, 5],
     Fuji: [5, 7],
     Tokyo: [7, itinerary.length],
-  };
+  }), []);
 
-  const matchesSearch = (text: string) =>
-    text.toLowerCase().includes(search.toLowerCase());
+  // Enhanced day classification
+  const getDayType = useCallback((day: Day) => {
+  if (day.day.includes("→")) return "travel";
+  if (day.schedule.length <= 3) return "light";
+
+  const highlightKeywords = ["usj", "ghibli", "teamlab", "fuji-q"];
+  if (day.schedule.some(item =>
+    highlightKeywords.some(keyword =>
+      item.activity.toLowerCase().includes(keyword)
+    )
+  )) return "highlight";
+
+  return "regular";
+}, []);
+
+  const getDayIntensity = useCallback((day: Day): "high" | "medium" | "low" => {
+  const activityCount = day.schedule.filter(
+    (item) =>
+      !item.activity.toLowerCase().includes("hotel") &&
+      !item.activity.toLowerCase().includes("rest") &&
+      !item.activity.toLowerCase().includes("back")
+  ).length;
+
+  if (activityCount >= 6) return "high";
+  if (activityCount >= 4) return "medium";
+  return "low";
+}, []);
+
+  const getActivityIcon = useCallback(
+  (activity: string): { icon: string; color: string } => {
+    const activityLower = activity.toLowerCase();
+
+    if (activityLower.includes("flight")) return { icon: "✈️", color: "flight" };
+    if (activityLower.includes("train") || activityLower.includes("jr"))
+      return { icon: "🚆", color: "train" };
+    if (activityLower.includes("bus")) return { icon: "🚌", color: "bus" };
+    if (activityLower.includes("hotel") || activityLower.includes("check-in"))
+      return { icon: "🏨", color: "hotel" };
+    if (activityLower.includes("shrine") || activityLower.includes("temple"))
+      return { icon: "⛩️", color: "shrine" };
+    if (activityLower.includes("shopping"))
+      return { icon: "🛍️", color: "shopping" };
+    if (
+      activityLower.includes("lunch") ||
+      activityLower.includes("dinner") ||
+      activityLower.includes("breakfast")
+    )
+      return { icon: "🍜", color: "food" };
+    if (activityLower.includes("onsen")) return { icon: "♨️", color: "onsen" };
+    if (
+      activityLower.includes("usj") ||
+      activityLower.includes("ghibli") ||
+      activityLower.includes("fuji-q") ||
+      activityLower.includes("teamlab")
+    )
+      return { icon: "🎢", color: "attraction" };
+
+    return { icon: "📍", color: "default" };
+  },
+  []
+);
+
+  // Fixed activity summary
+  const getActivitySummary = useCallback(
+  (
+    schedule: Activity[]
+  ): { highlights: string[]; moreCount: number } => {
+    const filtered = schedule.filter(
+      (item) =>
+        !item.activity.toLowerCase().includes("hotel") &&
+        !item.activity.toLowerCase().includes("back") &&
+        !item.activity.toLowerCase().includes("rest")
+    );
+
+    const highlights = filtered
+      .slice(0, 3)
+      .map((item) => getActivityIcon(item.activity).icon);
+
+    const moreCount = Math.max(0, filtered.length - 3);
+    return { highlights, moreCount };
+  },
+  [getActivityIcon]
+);
+
+
+  const matchesSearch = useCallback(
+  (text: string = ""): boolean => {
+    const query = search.trim().toLowerCase();
+    if (!query) return true;
+    return text.toLowerCase().includes(query);
+  },
+  [search]
+);
+
+  // Optimized intersection observer - only run once
+  useEffect(() => {
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+    }
+
+    observerRef.current = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting && !observedElementsRef.current.has(entry.target)) {
+          entry.target.classList.add('revealed');
+          observedElementsRef.current.add(entry.target);
+        }
+      });
+    }, OBSERVER_OPTIONS);
+
+    // Observe all scroll reveal elements
+    const scrollElements = document.querySelectorAll(`
+      .scroll-reveal,
+      .scroll-reveal-left,
+      .scroll-reveal-right,
+      .scroll-reveal-scale
+    `);
+
+    scrollElements.forEach(el => {
+      observerRef.current?.observe(el);
+    });
+
+    return () => {
+      observerRef.current?.disconnect();
+    };
+  }, []); // Run only once
+
+  // Optimized scroll handler
+  useEffect(() => {
+    let ticking = false;
+    
+    const handleScroll = () => {
+      if (!ticking) {
+        requestAnimationFrame(() => {
+          const scrollTop = window.scrollY;
+          const height = document.documentElement.scrollHeight - document.documentElement.clientHeight;
+          setScrollProgress((scrollTop / height) * 100);
+          setShowButton(scrollTop > SCROLL_THRESHOLD);
+          ticking = false;
+        });
+        ticking = true;
+      }
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  // Dark mode toggle
+  useEffect(() => {
+    document.body.classList.toggle("dark", darkMode);
+  }, [darkMode]);
+
+  // Trip countdown and progress with better date handling
+  useEffect(() => {
+    const updateCountdown = () => {
+      const now = new Date();
+      
+      if (now < tripStart) {
+        const diff = tripStart.getTime() - now.getTime();
+        const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
+        setCountdown(`${days} ${days === 1 ? 'day' : 'days'} to go`);
+        setTripProgress(0);
+      } else if (now > tripEnd) {
+        setCountdown("Trip completed");
+        setTripProgress(100);
+      } else {
+        // During trip - calculate which day we're on
+        const totalDuration = tripEnd.getTime() - tripStart.getTime();
+        const elapsed = now.getTime() - tripStart.getTime();
+        const totalDays = Math.ceil(totalDuration / (1000 * 60 * 60 * 24));
+        const currentDay = Math.floor(elapsed / (1000 * 60 * 60 * 24)) + 1;
+        
+        // Ensure currentDay doesn't exceed totalDays
+        const clampedDay = Math.min(currentDay, totalDays);
+        
+        setCountdown(`Day ${clampedDay} of ${totalDays}`);
+        setTripProgress(Math.min((elapsed / totalDuration) * 100, 100));
+      }
+    };
+
+    updateCountdown();
+    
+    // Update every hour, or more frequently if trip is active
+    const now = new Date();
+    const updateInterval = (now >= tripStart && now <= tripEnd) ? 
+      1000 * 60 * 15 : // Every 15 minutes during trip
+      1000 * 60 * 60;   // Every hour before/after trip
+    
+    const interval = setInterval(updateCountdown, updateInterval);
+    return () => clearInterval(interval);
+  }, [tripStart, tripEnd]);
+
+  // Optimized toggle functions
+  const toggleDay = useCallback((idx: number) => {
+  setOpenDays((prev) => {
+    const newSet = new Set(prev);
+    newSet.has(idx) ? newSet.delete(idx) : newSet.add(idx);
+    return newSet;
+  });
+}, []);
+
+  const collapseAll = useCallback(() => setOpenDays(new Set()), []);
+  
+  const expandAll = useCallback(() => {
+    setOpenDays(new Set(Array.from({ length: itinerary.length }, (_, i) => i)));
+  }, []);
+
+   const scrollToSection = useCallback((sectionId: string) => {
+    const element = document.getElementById(sectionId);
+    if (element) {
+      const headerOffset = 80; // adjust for sticky headers
+      const elementPosition = element.getBoundingClientRect().top;
+      const offsetPosition = elementPosition + window.pageYOffset - headerOffset;
+
+      window.scrollTo({
+        top: offsetPosition,
+        behavior: "smooth",
+      });
+    }
+  }, []);
+
+  // Keyboard handler for accessibility
+  const handleKeyDown = useCallback(
+  (event: React.KeyboardEvent, action: () => void) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      action();
+    }
+  },
+  []
+);
+
+  // Filtered itinerary based on search
+  const filteredItinerary = useMemo(() => {
+    if (!search.trim()) return itinerary;
+    
+    return itinerary.filter(day => 
+      matchesSearch(day.day) ||
+      matchesSearch(day.location) ||
+      day.schedule.some(item =>
+        matchesSearch(item.activity) ||
+        (item.note && matchesSearch(item.note)) ||
+        (item.cost && matchesSearch(item.cost))
+      )
+    );
+  }, [search, matchesSearch]);
 
   return (
     <div className={darkMode ? "dark" : ""}>
@@ -316,19 +504,28 @@ export default function Home() {
       <div
         className="scroll-progress-bar"
         style={{ width: `${scrollProgress}%` }}
+        role="progressbar"
+        aria-label="Page scroll progress"
       />
 
-      {/* Hero */}
+      {/* Hero Section */}
       <div className="hero">
         <div className="hero-content">
-          <Image src="/shiba.png" alt="Shiba Inu" width={120} height={120} />
-          <h1>Japan Trip Itinerary</h1>
-          <p>1 – 16 Mar 2026 · Osaka · Kyoto · Fuji · Tokyo</p>
+          <Image 
+            src="/shiba.png" 
+            alt="Shiba Inu mascot for Japan trip" 
+            width={120} 
+            height={120}
+            className="scroll-reveal-scale"
+            priority
+          />
+          <h1 className="scroll-reveal">Japan Trip Itinerary</h1>
+          <p className="scroll-reveal">1 – 16 Mar 2026 · Osaka · Kyoto · Fuji · Tokyo</p>
 
-          {/* Countdown + Trip Progress */}
-          <div className="trip-info">
+          {/* Trip Progress */}
+          <div className="trip-info scroll-reveal">
             <p className="trip-countdown">{countdown}</p>
-            <div className="trip-progress">
+            <div className="trip-progress" role="progressbar" aria-valuenow={tripProgress} aria-valuemin={0} aria-valuemax={100}>
               <div
                 className="trip-progress-bar"
                 style={{ width: `${tripProgress}%` }}
@@ -339,23 +536,22 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Search + Nav */}
-          <div className="hero-actions">
+          {/* Search + Navigation */}
+          <div className="hero-actions scroll-reveal">
             <input
               type="text"
               placeholder="🔎 Search day or activity..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              aria-label="Search itinerary"
             />
             <div className="nav-inline">
               {Object.keys(sections).map((key) => (
                 <button
                   key={key}
-                  onClick={() =>
-                    document
-                      .getElementById(key)
-                      ?.scrollIntoView({ behavior: "smooth" })
-                  }
+                  onClick={() => scrollToSection(key)}
+                  onKeyDown={(e) => handleKeyDown(e, () => scrollToSection(key))}
+                  aria-label={`Navigate to ${key} section`}
                 >
                   {key}
                 </button>
@@ -365,106 +561,230 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Dark Mode Toggle */}
-      <button
-        className="dark-toggle lantern"
-        onClick={() => setDarkMode(!darkMode)}
-        aria-label="Toggle dark mode"
-      >
-        {darkMode ? "🏮" : "💡"}
-      </button>
-
-      {/* Expand / Collapse All */}
-      <div className="expand-collapse">
-        <button onClick={collapseAll} style={{ marginRight: "10px" }}>
-          Collapse All
-        </button>
-        <button onClick={expandAll}>Expand All</button>
+      {/* Controls Bar */}
+      <div className="controls-bar scroll-reveal">
+        <div className="expand-controls">
+          <button 
+            onClick={collapseAll} 
+            className="control-button secondary"
+            onKeyDown={(e) => handleKeyDown(e, collapseAll)}
+            aria-label="Collapse all day cards"
+          >
+            Collapse All
+          </button>
+          <button 
+            onClick={expandAll} 
+            className="control-button secondary"
+            onKeyDown={(e) => handleKeyDown(e, expandAll)}
+            aria-label="Expand all day cards"
+          >
+            Expand All
+          </button>
+        </div>
+        
+        <div className="legend" role="group" aria-label="Day type legend">
+          <span className="legend-item travel">Travel Day</span>
+          <span className="legend-item highlight">Major Attraction</span>
+          <span className="legend-item light">Light Schedule</span>
+        </div>
       </div>
 
-      {/* Sections */}
+      {/* Dark Mode Toggle */}
+      <button
+        className="dark-toggle-redesigned"
+        onClick={() => setDarkMode(!darkMode)}
+        onKeyDown={(e) => handleKeyDown(e, () => setDarkMode(!darkMode))}
+        aria-label={`Switch to ${darkMode ? 'light' : 'dark'} mode`}
+      >
+        {darkMode ? "🌙" : "☀️"}
+      </button>
+
+      {/* Main Content Sections */}
       {Object.entries(sections).map(([region, [start, end]]) => (
-        <div key={region}>
-          <div id={region} className="section-divider">
-            ⛩️ {region}
+        <section key={region} className="region-section">
+          <div 
+            id={region} 
+            className="region-header scroll-reveal"
+          >
+            <div className="region-title">
+              <h2>{region}</h2>
+              <span className="region-days">
+                {end - start} day{end - start > 1 ? 's' : ''}
+              </span>
+            </div>
+            <div className={`region-accent ${region.toLowerCase()}`}></div>
           </div>
-          {itinerary.slice(start, end).map((day, idx) => {
-            const index = idx + start;
-            const visible =
-              search === "" ||
-              matchesSearch(day.day) ||
-              matchesSearch(day.location) ||
-              day.schedule.some(
-                (item) =>
+          
+          <div className={`days-container ${viewMode}`}>
+            {itinerary.slice(start, end).map((day, idx) => {
+              const index = idx + start;
+              const dayType = getDayType(day);
+              const intensity = getDayIntensity(day);
+              const summary = getActivitySummary(day.schedule);
+              
+              // Check if day matches search
+              const visible = !search.trim() || 
+                matchesSearch(day.day) ||
+                matchesSearch(day.location) ||
+                day.schedule.some(item =>
                   matchesSearch(item.activity) ||
                   (item.note && matchesSearch(item.note)) ||
                   (item.cost && matchesSearch(item.cost))
+                );
+              
+              if (!visible) return null;
+
+              const isOpen = openDays.has(index);
+              const scrollClass = idx % 2 === 0 ? 'scroll-reveal-left' : 'scroll-reveal-right';
+
+              return (
+                <article
+                  key={index}
+                  className={`day-card ${dayType} ${intensity} ${scrollClass}`}
+                  role="region"
+                  aria-labelledby={`day-${index}-title`}
+                >
+                  <header
+                    className="day-card-header"
+                    onClick={() => toggleDay(index)}
+                    onKeyDown={(e) => handleKeyDown(e, () => toggleDay(index))}
+                    aria-expanded={isOpen}
+                    aria-controls={`day-content-${index}`}
+                    role="button"
+                    tabIndex={0}
+                  >
+                    <div className="day-info">
+                      <div className="day-number" aria-hidden="true">
+                        Day {index + 1}
+                      </div>
+                      <div className="day-title">
+                        <h3 id={`day-${index}-title`}>{day.day.split("(")[0].trim()}</h3>
+                        <span className="day-location">{day.location}</span>
+                      </div>
+                    </div>
+
+                    <div className="day-preview">
+                      {/* Activity icons preview */}
+                      <div className="activity-icons" aria-label="Activity preview">
+                        {summary.highlights.map((icon, i) => (
+                          <span key={i} className="preview-icon" aria-hidden="true">
+                            {icon}
+                          </span>
+                        ))}
+                        {summary.moreCount > 0 && (
+                          <span
+                            className="more-count"
+                            aria-label={`${summary.moreCount} more activities`}
+                          >
+                            +{summary.moreCount}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Meta section with activities + intensity badge */}
+                      <div className="day-meta">
+                        <span className="activity-count">
+                          {day.schedule.length} activities
+                        </span>
+
+                        {/* Intensity badge */}
+                        {getDayIntensity(day) !== "low" && (
+                          <span className={`day-intensity ${getDayIntensity(day)}`}>
+                            {getDayIntensity(day) === "high" ? "Busy" : "Moderate"}
+                          </span>
+                        )}
+
+                        <span
+                          className={`expand-icon ${isOpen ? "rotated" : ""}`}
+                          aria-hidden="true"
+                        >
+                          ↓
+                        </span>
+                      </div>
+                    </div>
+                  </header>
+
+                  <div 
+                    id={`day-content-${index}`}
+                    className={`day-card-content ${isOpen ? 'open' : ''}`}
+                    aria-hidden={!isOpen}
+                  >
+                    <div className="activities-list">
+                      {day.schedule.map((item, i) => {
+                        const activityInfo = getActivityIcon(item.activity);
+                        
+                        return (
+                          <div
+                            key={i}
+                            className={`activity-item ${activityInfo.color} scroll-reveal`}
+                            style={{
+                              transitionDelay: isOpen ? `${i * ANIMATION_DELAY}ms` : '0ms'
+                            }}
+                          >
+                            <div className="activity-main">
+                              <div 
+                                className="activity-icon-container"
+                                aria-label={`${activityInfo.color} activity`}
+                              >
+                                <span className="activity-icon" aria-hidden="true">
+                                  {activityInfo.icon}
+                                </span>
+                              </div>
+                              
+                              <div className="activity-details">
+                                <div className="activity-header">
+                                  {item.time && (
+                                    <span className="activity-time" aria-label={`Time: ${item.time}`}>
+                                      {item.time}
+                                    </span>
+                                  )}
+                                  <h4 className="activity-title">{item.activity}</h4>
+                                  {item.cost && (
+                                    <span className="activity-cost" aria-label={`Cost: ${item.cost}`}>
+                                      {item.cost}
+                                    </span>
+                                  )}
+                                </div>
+                                
+                                {item.note && (
+                                  <div className="activity-note" role="note">
+                                    <span className="note-icon" aria-hidden="true">💡</span>
+                                    <span>{item.note}</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </article>
               );
-            if (!visible) return null;
+            })}
+          </div>
 
-            const isOpen = openDays.includes(index);
-
-            return (
-              <div
-                key={index}
-                className={`scroll-container ${region.toLowerCase()}`}
-              >
-                <div
-                  className={`day-header ${isOpen ? "active" : ""}`}
-                  onClick={() => toggleDay(index)}
-                >
-                  <span>
-                    {day.day} – {day.location}
-                  </span>
-                  <span>{isOpen ? "−" : "+"}</span>
-                </div>
-                <ul
-                  id={`schedule-${index}`}
-                  className={`schedule ${isOpen ? "open" : ""}`}
-                  style={{ height: isOpen ? undefined : "0px" }}
-                >
-                  {day.schedule.map((item, i) => (
-                    <li
-                      key={i}
-                      className={`fade-in ${isOpen ? "visible" : ""} ${
-                        matchesSearch(item.activity) ||
-                        (item.note && matchesSearch(item.note)) ||
-                        (item.cost && matchesSearch(item.cost))
-                          ? "highlight"
-                          : ""
-                      }`}
-                    >
-                      {/* Icon */}
-                      <span className={`icon ${getIconClass(item.activity)}`}>
-                        {item.icon}
-                      </span>
-                      {/* Time */}
-                      {item.time && <span className="time">{item.time}</span>}
-                      {/* Activity */}
-                      <span className="activity">{item.activity}</span>
-                      {/* Cost */}
-                      {item.cost && <span className="cost">{item.cost}</span>}
-                      {/* Notes */}
-                      {item.note && <div className="note">💡 {item.note}</div>}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            );
-          })}
-        </div>
+          {/* No results message */}
+          {search.trim() && filteredItinerary.length === 0 && (
+            <div className="no-results scroll-reveal">
+              <p>No activities found matching "{search}". Try a different search term.</p>
+            </div>
+          )}
+        </section>
       ))}
 
       {/* Back to Top */}
       <button
         className={`back-to-top ${showButton ? "" : "hidden"}`}
         onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+        onKeyDown={(e) => handleKeyDown(e, () => window.scrollTo({ top: 0, behavior: "smooth" }))}
+        aria-label="Back to top of page"
       >
         ↑
       </button>
 
       {/* Footer */}
-      <footer className="footer">
+      <footer className="footer scroll-reveal">
         <p>© 2025 Kevin Tan · Japan Trip Itinerary</p>
         <p className="footer-note">Built with Next.js · Styled with ❤️</p>
       </footer>
